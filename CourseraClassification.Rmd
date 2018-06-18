@@ -1,0 +1,106 @@
+---
+title: "Workout"
+author: "Jeremy Vanderwall"
+date: "June 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(gbm)
+library(elasticnet)
+library(e1071)
+library(forecast)
+library(AppliedPredictiveModeling)
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+data <- read.csv(file="pml-training.csv")
+validate <- read.csv(file= "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+```
+##Preprocess data 
+Several steps of preprocessing are needed.  First columns are changed to numeric since many get imported as factors.  Next, the columns with no variation are removed since they have no value.  Then, the first few columns get removed since line numbers and time stamps are not useful but may provide spurrious correlations.  The NA values from both data and validation are replaced with 0's.  The validation set is then modified so it has the same columns as data.  Then the data set is split into training and test data.  Lastly the data variable is removed for memory consideration since this is a larger data set.
+```{r }
+
+y <- data$classe
+data[] <- lapply(data, function(x) as.numeric(as.character(x)))
+validate[] <- lapply(validate, function(x) as.numeric(as.character(x)))
+data <- data[, colSums(data != 0, na.rm = TRUE) > 0]
+data <- data[, -c(1:7)]
+data$classe <- y
+data[is.na(data)] <- 0
+validate[is.na(validate)] <- 0
+names <- colnames(data)
+validate <- validate[ ,which(names(validate) %in% names)]
+
+trainSet = sample(1:dim(data)[1],size=dim(data)[1]/2,replace=F)
+train = data[trainSet,]
+test = data[-trainSet,]
+rm(data)
+
+
+```
+## tree model
+
+Train a model with random forests to see how well it does.
+
+```{r visualize}
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+mod1 <- train( classe ~.,method= "rf", data = train, trControl=fitControl)
+pred1 <- predict(mod1,test)
+confMat <- table(test$classe,pred1)
+accuracy1 <- sum(diag(confMat))/sum(confMat)
+accuracy1
+
+mod1$resample
+confusionMatrix.train(mod1)
+```
+
+
+## Train a Boosting model
+
+
+```{r pressure, echo=FALSE}
+mod2 <- train( classe~.,method= "gbm", data = train, trControl=fitControl)
+pred2 <- predict(mod2,test)
+confMat <- table(test$classe,pred2)
+accuracy2 <- sum(diag(confMat))/sum(confMat)
+accuracy2
+
+mod2$resample
+confusionMatrix.train(mod2)
+```
+
+## Train a linear model
+```{r }
+
+mod3 <- train(classe ~., method = "lda", data = train, trControl=fitControl)
+pred3 <- predict(mod3,test)
+confMat <- table(test$classe,pred3)
+accuracy3 <- sum(diag(confMat))/sum(confMat)
+accuracy3
+```
+
+## Make an ensamble of these 3
+```{r }
+predDF <- data.frame(pred1,pred2,pred3, classe = test$classe)
+comboMod <-train(classe ~ ., method="rf", data=predDF, trControl=fitControl)
+comboPred <-predict(comboMod, predDF)
+confMat <- table(test$classe,comboPred)
+accuracy4 <- sum(diag(confMat))/sum(confMat)
+accuracy4
+```
+
+##Conclusion
+The Random forest dominates with this dataset.  Doing an ensable with other classifiers doesn't improve accuracy to a noticable degree
+
+##Validation set
+```{r }
+predict(mod1, validate)
+stopCluster(cluster)
+registerDoSEQ()
+```
